@@ -75,7 +75,7 @@ async def upload_pdf(file: UploadFile = File(...)):
 
         return {
             "filename": file.filename,
-            "file_id": file_id,
+            "fileId": file_id,
             "total_cleaned_pages": len(cleaned_pages),
             "total_chunks": len(chunks),
             "stored_chunks": stored_count,
