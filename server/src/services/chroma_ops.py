@@ -46,8 +46,6 @@ def query_similar_chunks(
         where={"$and": [{"file_id": file_id}, {"user_id": user_id}]}
     )
 
-
-
 def delete_file_chunks(file_id: str, chroma_client) -> int:
     """
     Delete all embeddings belonging to file_id.
