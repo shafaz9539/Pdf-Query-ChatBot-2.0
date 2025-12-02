@@ -1,62 +1,48 @@
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel
-from src.db.chroma_ops import query_similar_chunks
-from src.services.embedder import embed_query
-from src.services.rag import generate_answer  
+
+from ..database.connection import get_chroma_client_instance
+from ..services.rag_service import RAG_PIPLINE 
+from ..core.security import get_current_user
+from ..models.document import User 
 
 router = APIRouter(prefix="/query", tags=["query"])
 
 class QueryRequest(BaseModel):
     file_id: str
     question: str
-    top_k: int = 5  
-
-
-@router.post("/")
-async def query_pdf(payload: QueryRequest):
-
-    file_id = payload.file_id
-    question = payload.question
-    top_k = payload.top_k
-
+    top_k: int = 5 
+    
+@router.post("/", status_code=status.HTTP_200_OK)
+async def query_pdf(
+    request: Request,
+    payload: QueryRequest,
+    # 🚨 FIX 1: Add authentication dependency
+    current_user: User = Depends(get_current_user),
+    # 🚨 FIX 2: Inject the initialized Chroma client instance
+    chroma_client = Depends(get_chroma_client_instance)
+):
     try:
-        # 1️⃣ Embed the query using Gemini embedding model
-        query_vec = embed_query(question)
-
-        # 2️⃣ Search Chroma using file filter
-        res = query_similar_chunks(file_id=file_id, query_embedding=query_vec, top_k=top_k)
-
-        if not res or not res.get("documents") or not res["documents"][0]:
-            raise HTTPException(status_code=404, detail="No relevant content found for this file_id")
-
-        # 3️⃣ Extract docs + metadata
-        docs = res["documents"][0]
-        metadatas = res.get("metadatas", [[]])[0]
-
-        # 4️⃣ Sort chunks by page_number
-        combined = list(zip(docs, metadatas))
-        combined.sort(key=lambda x: x[1].get("page_number", 0))
-
-        sorted_docs = [x[0] for x in combined]
-        sorted_meta = [x[1] for x in combined]
-
-        # 5️⃣ Limit context length for Gemini
-        safe_context = "\n\n".join(sorted_docs[:top_k])
-
-        # 6️⃣ Ask Gemini Flash using RAG
-        answer = generate_answer(
-            question=question,
-            context=safe_context
+        # 🚨 FIX 3: Instantiate the service correctly (Binding 'self' and dependencies)
+        service = RAG_PIPLINE(
+            user_id=str(current_user.id),
+            chroma_client=chroma_client
+        )
+        
+        # 🚨 FIX 4: Call the method from the service instance
+        answer_data = await service.query_and_answer_pdf(
+            file_id=payload.file_id,
+            question=payload.question,
+            top_k=payload.top_k
         )
 
-        return {
-            "file_id": file_id,
-            "question": question,
-            "answer": answer,
-            "chunks_used": sorted_docs[:top_k],
-            "metadatas_used": sorted_meta[:top_k],
-            "top_k": top_k
-        }
+        return answer_data
 
+    except ValueError as e:
+        # Catch custom exception raised by the service (e.g., "No content found")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
+        
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        # Avoid generic 500 block; FastAPI handles uncaught errors better
+        # This remains for debugging external failures:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Internal Query Error: {e}")
