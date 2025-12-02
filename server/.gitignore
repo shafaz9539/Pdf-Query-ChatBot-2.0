@@ -71,3 +71,5 @@ docker-compose.override.yml
 # Secrets / credentials
 secrets.json
 .env.local
+
+vector_store/
